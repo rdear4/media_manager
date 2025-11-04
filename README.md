@@ -42,7 +42,11 @@ Some variation of these processes over and over again has resulted in duplicate 
     - [x] Create table for files
     - [x] Create table for filenames
     - [x] Create table for directories
-- [ ] Add arg to clear db and tables
-- [ ] Add files to db
+- [x] Add arg to clear db and tables
+- [x] Add files to db
 - [x] Add filetypes to db
-- [ ] Add directories to db
+- [x] ~~Add directories to db~~
+- [ ] Gather exif data about each supported filetype
+- [ ] Update metadata for each supported file in the db
+- [ ] Add flag specifically for finding media
+- [ ] Add flag for list duplicate file info (total files, count of uniques, etc)
