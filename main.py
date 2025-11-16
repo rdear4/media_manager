@@ -255,12 +255,13 @@ def processMedia(files, cursor, ftRef):
 
         try:
             img_data = {
+                "id": file['id'],
                 "hash": "",
                 "size": os.path.getsize(file["fqdn"]),
                 "latitude": "",
                 "longitude": "",
                 "altitude": "",
-                "processed": 1,
+                "processed": 0,
                 "filetypeId": ftRef[file["fqdn"].split(".")[-1].lower()]['id'],
                 "filepath_original": file["fqdn"],
                 "name": file["fqdn"].split("/")[-1],
@@ -297,16 +298,29 @@ def processMedia(files, cursor, ftRef):
                             logger.error(F"ProcessMedia() - Failed to get exif datetime")
                         
                         img_data["fileDateTime"] = datetime.datetime.fromtimestamp(os.path.getctime(file["fqdn"]))
-
+                        img_data['processed'] = 1
                         logger.debug(f"ProcessMedia() - EXIF Data:")
                         for k, v in img_data.items():
                             logger.debug(f"ProcessMedia() - \t{k}: \t{v}")
 
                 except Exception as e:
                     logger.error(f"ProcessMedia() - {e}")
-        
+
+            updateFileInDb(cursor, img_data)
         except Exception as e:
             logger.error(f"Failed to process file: {file['fqdn']} - {e}")
+
+def updateFileInDb(cursor, img_data):
+
+    logger.info(f"UpdateFileInDb() - updating file in db")
+    
+    try:
+    
+        cursor.execute("UPDATE media SET hash=:hash, size=:size, latitude=:latitude, longitude=:longitude, processed=:processed, fileDateTime=:fileDateTime, exifDateTime=:exifDateTime, cameraModel=:cameraModel WHERE id=:id", img_data)
+        cursor.connection.commit()
+
+    except Exception as e:
+        logger.error(f"UPDATEFULEINDB() - {e}")
 
 def getFilesFromDB(cur):
 
