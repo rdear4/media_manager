@@ -5,3 +5,6 @@
 test.py
 #directory for outputting frames from opencv
 test/
+
+#disregard python virtual environment
+env/

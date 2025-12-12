@@ -5,9 +5,13 @@ import sqlite3
 import os
 import hashlib
 import datetime
+import mediameta # type: ignore
+import ffmpeg # type: ignore
+import re
+import json
 
-from PIL import Image
-from PIL.ExifTags import TAGS
+from PIL import Image # type: ignore
+from PIL.ExifTags import TAGS # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +59,7 @@ def setupDB():
                         longitude text,
                         hash text,
                         cameraModel text,
+                        cameraMake text,
                         exifDateTime text,
                         moved integer default 0,
                         processed integer default 0
@@ -239,72 +244,160 @@ def extractGPSData(filepath, gps_exif):
 
     return gps_data
 
+def processImage(file, img_data):
+
+    return_info = img_data.copy()
+
+    with Image.open(file["fqdn"]) as img:
+        logger.info(f"ProcessImage() - Opened image: {file['fqdn']} for processing")
+
+        try:
+            return_info["hash"] = hashlib.md5(img.tobytes()).hexdigest()
+            if hasattr(img, '_getexif') and img._getexif():
+                exif_data = img._getexif()
+                # for k,v in exif_data.items():
+                #     print(f"{k} - {TAGS[k]}")
+                # Parse GPS data
+                try:
+                    gps_data = extractGPSData(file["fqdn"], exif_data[34853])
+                    return_info.update(gps_data)
+                except Exception as e:
+                    logger.error(f"GPS Data not found for file: {file['fqdn']}")
+                try:
+                    return_info["cameraModel"] = f"{exif_data[272]}"
+                    return_info["cameraMake"] = f"{exif_data[271]}"
+                except Exception as e:
+                    logger.error(F"ProcessImage() - Failed to get exif camera model")
+                try:
+                    return_info["exifDateTime"] = exif_data[36867]
+                except Exception as e:
+                    logger.error(F"ProcessImage() - Failed to get exif datetime")
+                
+            return_info['processed'] = 1
+            logger.debug(f"ProcessImage() - EXIF Data:")
+            for k, v in return_info.items():
+                logger.debug(f"ProcessImage() - \t{k}: \t{v}")
+
+            
+        except Exception as e:
+            raise Exception(f"ProcessImage() - {e}")
+        
+    return return_info
+
+def processVideo(file_data):
+
+    #Get the number of frames
+    #get the width, height
+    #Get the duration_ts, duration, nb_frames
+    return_data = file_data.copy()
+
+    video_tags = ['width', 'height', 'duration_ts', 'duration', 'nb_frames']
+    video_data_dict = {}
+    logger.info(f"ProcessingVideo() - Processing file: {file_data["fqdn"]}")
+    try:
+        # print(f"loading data for: {file_data["fqdn"]}\n")
+        probe = ffmpeg.probe(file_data["fqdn"])
+        # print(json.dumps(probe, indent=4))clea
+
+        for stream in probe['streams']:
+            # print(f"\n{stream['codec_type']}")
+            # print(type(set(stream.keys())))
+            # print(set(stream.keys()))
+            if set(video_tags).issubset(set(stream.keys())):
+                for key in video_tags:
+                    try:
+                        video_data_dict[key] = stream[key]
+                    except Exception as e:
+                        video_data_dict[key] = ""
+                        print(f"Unable to get data for key: {key} - {e}")
+                
+                return_data['video_data'] = video_data_dict
+            else:
+                # print("Keys not found")
+                pass
+        
+        try:
+            #get make
+            tags = probe['format']['tags']
+            
+            return_data["cameraMake"] = tags['com.apple.quicktime.make']
+            return_data["cameraModel"] = tags['com.apple.quicktime.model']
+            return_data["exifDateTime"] = tags['com.apple.quicktime.creationdate']
+
+            print(f'TYPE: {type(return_data["exifDateTime"])}')
+            pattern = r"[+-]\d+.\d+"
+            matches = re.findall(pattern, tags['com.apple.quicktime.location.ISO6709'])
+            
+            # parsed_location
+            return_data["latitude"] = f'{matches[0][1:]} N'
+            return_data["longitude"] = f'{matches[1][1:]} W'
+            return_data["altitude"] = matches[2]
+            
+            return_data['video_data']['filesize'] = probe['format']['size']
+            return_data['hash'] = hashlib.md5(json.dumps(return_data['video_data']).encode('utf-8')).hexdigest()
+
+        except Exception as e:
+            print(f"PROCESSVIDEO() - Faield to get exif data - {e}")
+            logger.error(f"PROCESSVIDEO() - Faield to get exif data - {e}")
+
+    except Exception as e:
+        
+        logger.error("PROCESSVIDEO() - Failed to process video - {e}")
+
+    # print("\n")
+    return return_data
+    
 def processMedia(files, cursor, ftRef):
 
     logger.info(f"ProcessMedia() - Processing all found files")
-    ACCEPTED_FILETYPES = ["jpg", "jpeg"]
+    ACCEPTED_FILETYPES = ["jpg", "jpeg", "mov", "m4v"]
 
     for file in files:
-        
-        if file['extension'] not in ACCEPTED_FILETYPES:
-            logger.info(f"ProcessMedia() - file: {file['fqdn']} not currently supported for processing. Skipping.")
-            continue
+        # print("######\n")
+        # print(file["fqdn"])
+        img_data = {
+            "id": file['id'],
+            "hash": "",
+            "size": os.path.getsize(file["fqdn"]),
+            "latitude": "",
+            "longitude": "",
+            "altitude": "",
+            "processed": 0,
+            "filetypeId": ftRef[file["fqdn"].split(".")[-1].lower()]['id'],
+            "filepath_original": file["fqdn"],
+            "name": file["fqdn"].split("/")[-1],
+            "cameraModel": "",
+            "cameraMake": "",
+            "fileDateTime": datetime.datetime.fromtimestamp(os.path.getctime(file["fqdn"])),
+            "exifDateTime": "",
+            "fqdn": file["fqdn"]
+        }
 
         logger.info(f"ProcessMedia() - processing: {file['fqdn']}")
-        
+            
 
         try:
-            img_data = {
-                "id": file['id'],
-                "hash": "",
-                "size": os.path.getsize(file["fqdn"]),
-                "latitude": "",
-                "longitude": "",
-                "altitude": "",
-                "processed": 0,
-                "filetypeId": ftRef[file["fqdn"].split(".")[-1].lower()]['id'],
-                "filepath_original": file["fqdn"],
-                "name": file["fqdn"].split("/")[-1],
-                "cameraModel": "",
-                "fileDateTime": "",
-                "exifDateTime": "",
-                "fqdn": file["fqdn"]
-            }
+            if file['extension'] in ACCEPTED_FILETYPES:
 
-                        
-            with Image.open(file["fqdn"]) as img:
-                logger.info(f"ProcessMedia() - Opened image: {file['fqdn']} for processing")
+                if file['extension'] in ['jpg', 'jpeg']:
+                    try:
+                        img_data = processImage(file, img_data)
 
-                try:
-                    img_data["hash"] = hashlib.md5(img.tobytes()).hexdigest()
-                    if hasattr(img, '_getexif') and img._getexif():
-                        exif_data = img._getexif()
-                        # for k,v in exif_data.items():
-                        #     print(f"{k} - {TAGS[k]}")
-                        # Parse GPS data
-                        try:
-                            gps_data = extractGPSData(file["fqdn"], exif_data[34853])
-                            img_data.update(gps_data)
-                        except Exception as e:
-                            raise Exception("GPS Data not found for file")
+                        # print(img_data)
+                    except Exception as e:
+                        logger.error(f"ProcessMedia - {e}")
+                
+                elif file['extension'] in ['mov', 'm4v']:
 
-                        try:
-                            img_data["cameraModel"] = f"{exif_data[271]} {exif_data[272]}"
-                        except Exception as e:
-                            logger.error(F"ProcessMedia() - Failed to get exif camera model")
-                        try:
-                            img_data["exifDateTime"] = exif_data[36867]
-                        except Exception as e:
-                            logger.error(F"ProcessMedia() - Failed to get exif datetime")
-                        
-                        img_data["fileDateTime"] = datetime.datetime.fromtimestamp(os.path.getctime(file["fqdn"]))
-                        img_data['processed'] = 1
-                        logger.debug(f"ProcessMedia() - EXIF Data:")
-                        for k, v in img_data.items():
-                            logger.debug(f"ProcessMedia() - \t{k}: \t{v}")
+                    try:
+                        img_data = processVideo(img_data)
 
-                except Exception as e:
-                    logger.error(f"ProcessMedia() - {e}")
+                        # print("#######")
+                        # print(img_data)
+
+                    except Exception as e:
+
+                        logger.error(f"ProcessMedia - {e}")
 
             updateFileInDb(cursor, img_data)
         except Exception as e:
@@ -316,7 +409,7 @@ def updateFileInDb(cursor, img_data):
     
     try:
     
-        cursor.execute("UPDATE media SET hash=:hash, size=:size, latitude=:latitude, longitude=:longitude, processed=:processed, fileDateTime=:fileDateTime, exifDateTime=:exifDateTime, cameraModel=:cameraModel WHERE id=:id", img_data)
+        cursor.execute("UPDATE media SET hash=:hash, size=:size, latitude=:latitude, longitude=:longitude, processed=:processed, fileDateTime=:fileDateTime, exifDateTime=:exifDateTime, cameraMake=:cameraMake, cameraModel=:cameraModel WHERE id=:id", img_data)
         cursor.connection.commit()
 
     except Exception as e:
