@@ -46,7 +46,8 @@ Some variation of these processes over and over again has resulted in duplicate 
 - [x] Add files to db
 - [x] Add filetypes to db
 - [x] ~~Add directories to db~~
-- [ ] Gather exif data about each supported filetype
-- [ ] Update metadata for each supported file in the db
-- [ ] Add flag specifically for finding media
+- [x] Gather exif data about each supported filetype
+- [x] Update metadata for each supported file in the db
+- [x] Add flag specifically for finding media
 - [ ] Add flag for list duplicate file info (total files, count of uniques, etc)
+- [ ] Add feature ability to process videos 
