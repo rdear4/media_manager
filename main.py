@@ -127,7 +127,7 @@ def loadKnownFiletypes(c):
 def addFilesToDB(cursor, files, ftReference):
 
     logger.info(f"AddFilesToDB - Adding {len(files)} files to db")
-    # print(files)
+
     for file in files:
 
         logger.debug(f"AddFilesToDB() - Adding \'{file.split('/')[-1]}\' to db")
@@ -140,13 +140,13 @@ def addFilesToDB(cursor, files, ftReference):
                 "fqdn": file,
                 "filetypeId": ftReference[file.split(".")[-1].lower()]['id']
             }
-            # print(fileInfo)
+
             cursor.execute("INSERT INTO media(name, filepath_original, fqdn, filetypeId) VALUES(:name,:filepath_original,:fqdn, :filetypeId)", fileInfo)
             cursor.connection.commit()
         except KeyError as e:
             logger.error(f"AddFilesToDB() - The following key does not exist in the filtype reference dict: {e}")
         except Exception as e:
-            # print(type(e).__name__)
+
             if type(e).__name__ == "IntegrityError" and args.verbose:
                 logger.error(f"Unable to add file {file} to db. It may already exist")
             if type(e).__name__ != "IntegrityError":
@@ -165,8 +165,7 @@ def findFiles(c):
             if len(files):
                 for file in files:
                     logger.debug(f"FindFiles() - \tFile: {file}")
-                    # print(args.includehidden)
-                    
+
                     if file[0] == "." and not args.includehidden:
                         continue
                     else:
@@ -255,8 +254,7 @@ def processImage(file, img_data):
             return_info["hash"] = hashlib.md5(img.tobytes()).hexdigest()
             if hasattr(img, '_getexif') and img._getexif():
                 exif_data = img._getexif()
-                # for k,v in exif_data.items():
-                #     print(f"{k} - {TAGS[k]}")
+
                 # Parse GPS data
                 try:
                     gps_data = extractGPSData(file["fqdn"], exif_data[34853])
@@ -295,25 +293,23 @@ def processVideo(file_data):
     video_data_dict = {}
     logger.info(f"ProcessingVideo() - Processing file: {file_data["fqdn"]}")
     try:
-        # print(f"loading data for: {file_data["fqdn"]}\n")
+
         probe = ffmpeg.probe(file_data["fqdn"])
-        # print(json.dumps(probe, indent=4))clea
+
 
         for stream in probe['streams']:
-            # print(f"\n{stream['codec_type']}")
-            # print(type(set(stream.keys())))
-            # print(set(stream.keys()))
+
             if set(video_tags).issubset(set(stream.keys())):
                 for key in video_tags:
                     try:
                         video_data_dict[key] = stream[key]
                     except Exception as e:
                         video_data_dict[key] = ""
-                        print(f"Unable to get data for key: {key} - {e}")
+                        logger.error(f"Unable to get data for key: {key} - {e}")
                 
                 return_data['video_data'] = video_data_dict
             else:
-                # print("Keys not found")
+                #Keys not found
                 pass
         
         try:
@@ -324,7 +320,7 @@ def processVideo(file_data):
             return_data["cameraModel"] = tags['com.apple.quicktime.model']
             return_data["exifDateTime"] = tags['com.apple.quicktime.creationdate']
 
-            print(f'TYPE: {type(return_data["exifDateTime"])}')
+            
             pattern = r"[+-]\d+.\d+"
             matches = re.findall(pattern, tags['com.apple.quicktime.location.ISO6709'])
             
@@ -337,14 +333,14 @@ def processVideo(file_data):
             return_data['hash'] = hashlib.md5(json.dumps(return_data['video_data']).encode('utf-8')).hexdigest()
 
         except Exception as e:
-            print(f"PROCESSVIDEO() - Faield to get exif data - {e}")
+            
             logger.error(f"PROCESSVIDEO() - Faield to get exif data - {e}")
 
     except Exception as e:
         
         logger.error("PROCESSVIDEO() - Failed to process video - {e}")
 
-    # print("\n")
+
     return return_data
     
 def processMedia(files, cursor, ftRef):
@@ -353,8 +349,7 @@ def processMedia(files, cursor, ftRef):
     ACCEPTED_FILETYPES = ["jpg", "jpeg", "mov", "m4v"]
 
     for file in files:
-        # print("######\n")
-        # print(file["fqdn"])
+
         img_data = {
             "id": file['id'],
             "hash": "",
@@ -383,7 +378,6 @@ def processMedia(files, cursor, ftRef):
                     try:
                         img_data = processImage(file, img_data)
 
-                        # print(img_data)
                     except Exception as e:
                         logger.error(f"ProcessMedia - {e}")
                 
@@ -391,9 +385,6 @@ def processMedia(files, cursor, ftRef):
 
                     try:
                         img_data = processVideo(img_data)
-
-                        # print("#######")
-                        # print(img_data)
 
                     except Exception as e:
 
@@ -408,12 +399,14 @@ def updateFileInDb(cursor, img_data):
     logger.info(f"UpdateFileInDb() - updating file in db")
     
     try:
-    
+        print("\n")
+        print(img_data)
         cursor.execute("UPDATE media SET hash=:hash, size=:size, latitude=:latitude, longitude=:longitude, processed=:processed, fileDateTime=:fileDateTime, exifDateTime=:exifDateTime, cameraMake=:cameraMake, cameraModel=:cameraModel WHERE id=:id", img_data)
         cursor.connection.commit()
 
     except Exception as e:
-        logger.error(f"UPDATEFULEINDB() - {e}")
+        logger.error(f"UPDATEFILEINDB() - {e}")
+        logger.error(f"UPDATEFILEINDB() - \t{img_data['fqdn']}")
 
 def getFilesFromDB(cur):
 
@@ -433,10 +426,9 @@ def main():
 
             filetypes = loadKnownFiletypes(cursor)
             #Create a reference dict so that the next step can use the ids of the filetypes
-            
-        
-            # print(filetypeReference)
+
             addFilesToDB(cursor, files, filetypes)
+            
         if args.process:
             
             filetypes = loadKnownFiletypes(cursor)
@@ -445,9 +437,7 @@ def main():
             unprocessedFiles = getFilesFromDB(cursor)
             logger.info(f"There are {len(unprocessedFiles)} files that need to be processed")
             processMedia(unprocessedFiles, cursor, filetypes)
-            # logger.info("Main() - Known filetypes:")
-            # for ft in filetypes:
-            #     logger.info(f"Main() - \t{ft[1]}")
+
 
     except Exception as e:
         connection.close()
@@ -464,11 +454,11 @@ if __name__ == "__main__":
     #set up logger
     fmt = '[%(levelname)s]\t%(asctime)s - %(filename)s:%(lineno)d - %(message)s'
     if args.logging:
-        logging.basicConfig(level=logging.INFO, format=fmt)
+        logging.basicConfig(level=logging.INFO, format=fmt, filename="./logs.txt", filemode="a")
     elif args.verbose:
-        logging.basicConfig(level=logging.DEBUG, format=fmt)
+        logging.basicConfig(level=logging.DEBUG, format=fmt, filename="./logs.txt", filemode="a")
     else:
-        logging.basicConfig(level=100)
+        logging.basicConfig(level=100, filename="./logs.txt", filemode="a")
 
     try:
         main()

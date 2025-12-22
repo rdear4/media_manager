@@ -8,3 +8,6 @@ test/
 
 #disregard python virtual environment
 env/
+
+#disregard log files
+log*.txt

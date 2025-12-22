@@ -31,6 +31,7 @@ Some variation of these processes over and over again has resulted in duplicate 
 
 - install PIL
 - install ExifTool
+- install ffmpeg
 
 ## TO DO
 
