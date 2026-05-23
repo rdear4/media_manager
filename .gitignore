@@ -11,4 +11,4 @@ test/
 env/
 
 #disregard log files
-log*.txt
+logs/
