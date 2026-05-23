@@ -1,4 +1,4 @@
-import logging
+import logging, logging.config, logging.handlers
 import argparse
 import time
 import sqlite3
@@ -9,9 +9,15 @@ import mediameta # type: ignore
 import ffmpeg # type: ignore
 import re
 import json
+from pathlib import Path
 
 from PIL import Image # type: ignore
 from PIL.ExifTags import TAGS # type: ignore
+
+logging.config.dictConfig({
+    'version': 1,
+    'disable_existing_loggers': True
+})
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +28,7 @@ parser.add_argument("-p", "--process", help="Selecting this option will query th
 parser.add_argument("-l", "--logging", help="Includes all logging except DEBUG", action="store_true")
 parser.add_argument("-f", "--find", help="Find files in the provided path or if one is not provided, in the default path", action="store_true")
 parser.add_argument("-v", "--verbose", help="Includes all levels", action="store_true")
-parser.add_argument("-i", "--includehidden", help="Ignore hidden files beginning with", action="store_true")
+parser.add_argument("-i", "--includehidden", help="Ignore hidden files beginning with '.'", action="store_true")
 parser.add_argument("-c", "--cleardb", help="Drop all tables from db and recreated them", action="store_true")
 parser.add_argument("-n", "--numbertoprocess", help="Specify the number of files to process. If this is omitted, all files will be processed", type=int, default=-1)
 args = parser.parse_args()
@@ -68,22 +74,22 @@ def setupDB():
             }
         ]
     }
-    logger.info("SetupDB() - Setting up database")
+    logger.info("Setting up database")
 
     connection = sqlite3.connect(DB_INFO["name"])
     connection.row_factory = sqlite3.Row
 
     cursor = connection.cursor()
 
-    logger.info("SetupDB() - Checking to see if tables exist")
+    logger.info("Checking to see if tables exist")
 
     try:
         for table in DB_INFO["tables"]:
 
-            logger.debug(f"SetupDB() - Checking if \'{table['name']}\' table exists")
+            logger.debug(f"Checking if \'{table['name']}\' table exists")
 
             if args.cleardb:
-                logger.debug(f"SetupDB() - Dropping table: {table['name']}")
+                logger.debug(f"Dropping table: {table['name']}")
                 cursor.execute(f"DROP TABLE IF EXISTS {table['name']}")
                 connection.commit()
 
@@ -91,20 +97,20 @@ def setupDB():
             res = cursor.fetchone()
 
             if res:
-                logger.debug(f"SetupDB() - \t\'{table['name']}\' exists!")
+                logger.debug(f"\t\'{table['name']}\' exists!")
             else:
-                logger.debug(f"SetupDB() - \t\'{table['name']}\' does not exist!")
-                logger.debug(f"SetupDB() - Creating table: '{table['name']}\'")
+                logger.debug(f"\t\'{table['name']}\' does not exist!")
+                logger.debug(f"Creating table: '{table['name']}\'")
                 try:
                     cursor.execute(table["create_command"])
                     connection.commit()
-                    logger.debug(f"SetupDB() - Table: \'{table['name']}\' created successfully!")
+                    logger.debug(f"Table: \'{table['name']}\' created successfully!")
                 except Exception as e:
                     raise Exception(f"Failed to create table: \'{table['name']}\' - {e}")
 
     except Exception as e:
 
-        raise Exception(f"SETUP DB - {e}")
+        raise Exception(f"{e}")
 
     return connection, cursor
 
@@ -130,7 +136,7 @@ def addFilesToDB(cursor, files, ftReference):
 
     for file in files:
 
-        logger.debug(f"AddFilesToDB() - Adding \'{file.split('/')[-1]}\' to db")
+        logger.debug(f"Adding \'{file.split('/')[-1]}\' to db")
         
         try:
             # sql = "INSERT INTO media(name, filepath_original, fqdn) VALUES(?, ?, ?)"
@@ -144,70 +150,118 @@ def addFilesToDB(cursor, files, ftReference):
             cursor.execute("INSERT INTO media(name, filepath_original, fqdn, filetypeId) VALUES(:name,:filepath_original,:fqdn, :filetypeId)", fileInfo)
             cursor.connection.commit()
         except KeyError as e:
-            logger.error(f"AddFilesToDB() - The following key does not exist in the filtype reference dict: {e}")
+            logger.error(f"The following key does not exist in the filtype reference dict: {e}")
         except Exception as e:
 
             if type(e).__name__ == "IntegrityError" and args.verbose:
                 logger.error(f"Unable to add file {file} to db. It may already exist")
             if type(e).__name__ != "IntegrityError":
-                logger.error(f"AddFilesToDB() - {e}")
+                logger.error(f"{e}")
         # cursor.execute("INSERT INTO media()")
 
-def findFiles(c):
+def findFiles(c, filetypes):
 
+    logger.info("Finding files...")
+    foundFiletpyes = set()
     try:
         filesToProcess = []
         directories = []
-        logger.info(f"FindFiles() - Ssearching for media starting in '{args.directory}'")
+        logger.info(f"Ssearching for media starting in '{args.directory}'")
         for root, dirs, files in os.walk(args.directory):
-            directories.extend([os.path.join(root, d) for d in dirs])
-
+            # directories.extend([os.path.join(root, d) for d in dirs])
+            logger.info(f"Searching in {dirs}")
             if len(files):
                 for file in files:
-                    logger.debug(f"FindFiles() - \tFile: {file}")
+                    logger.debug(f"\tFile: {file}")
 
                     if file[0] == "." and not args.includehidden:
                         continue
                     else:
-                        logger.debug(f"FindFiles() - \tFile: {os.path.join(root, file)}")
-                        filesToProcess.append(os.path.join(root, file))
+                        logger.debug(f"\tFile: {os.path.join(root, file)}")
+                        try:
+                            path = Path(os.path.join(root, file)).resolve()
+                            logger.debug(f"\tAbs Path: {path}")
+                            filetype = path.suffix[1:]
+                            
+                            foundFiletpyes.add(filetype.lower())
+                            if filetype.lower() in filetypes:
+                                filesToProcess.append(os.path.join(root, file))
+                            else:
+                                logger.info(f"Not including filetype: '{filetype}'")
+                        except Exception as e:
+                            logger.error(e)
 
-        logger.info(f"FindFiles() - There were {len(filesToProcess)} files found in {len(directories)} directories")
+        # logger.info(f"There were {len(filesToProcess)} files found in {len(directories)} directories")
         
-        logger.debug(f"FindFiles - Directories:")
-        for d in directories:
-            logger.debug(f"FindFiles - \t{d}")
+        # logger.debug(f"FindFiles - Directories:")
+        # for d in directories:
+        #     logger.debug(f"FindFiles - \t{d}")
 
-        logger.info("FindFiles() - Getting list of unique filetypes")
-        filetypes = {file.split(".")[-1].lower() for file in filesToProcess}
-        logger.info(f"FindFiles() - There are {len(filetypes)} unique filetypes in the list of found files")
-
-        logger.debug(f"FindFiles() - Filetypes:")
-        for ft in list(filetypes):
-            logger.debug(f"FindFiles() - \t{ft}")
+        # logger.info("Getting list of unique filetypes")
+        # filetypes = {file.split(".")[-1].lower() for file in filesToProcess}
+        # logger.info(f"There are {len(filetypes)} unique filetypes in the list of found files")
+        logger.info("The following filetypes were found:")
+        for ft in foundFiletpyes:
+            logger.info(f"\t\t{ft}")
 
         #add new filetypes to DB
         try:
-            updateFiletypes(c, list(filetypes))
+            addFiletypesDisallowed(c, list(foundFiletpyes))
         except Exception as e:
-            logger.error(f"FIND FILES - {e}")
+            logger.error(f"{e}")
 
         return filesToProcess
 
     except Exception as e:
-        raise Exception(f"FIND FILES - {e}")
+        raise Exception(f"{e}")
 
-def updateFiletypes(c, ft):
+def addFiletypesDisallowed(c, ft):
 
-    logger.info("UpdateFiletypes() - Updating filetypes in db")
+    logger.info("Updating filetypes in db")
     for filetype in ft:
-        logger.debug(f"updateFiletypesAndRefresh() - Adding \'{filetype}\' to the filetypes table")
+        logger.debug(f"Adding \'{filetype}\' to the filetypes table")
         try:        
-            c.execute(f'INSERT INTO filetypes ("extension") VALUES ("{filetype}")')
+            c.execute(f'INSERT INTO filetypes ("extension", "shouldProcess") VALUES ("{filetype}", 0)')
             c.connection.commit()
 
         except Exception as e:
-            logger.error(f"UPDATE FILETYPES AND REFRESH - Unable to add \'{filetype}\' to db - {e}")
+            logger.error(f"Unable to add \'{filetype}\' to db - {e}")
+
+def updateFiletypesAllowed(c, ft):
+
+    logger.info("Updating filetypes that should be processed in db")
+    for filetype in ft:
+        logger.debug(f"Updating \'{filetype}\' and setting shoudProcess to 1")
+        try:        
+            c.execute(f'UPDATE filetypes SET shouldProcess = 1 WHERE extension = "{filetype}"')
+            c.connection.commit()
+
+        except Exception as e:
+            logger.error(f"Unable to add \'{filetype}\' to db - {e}")
+
+def updateFiletypesDisAllowed(c, ft):
+
+    logger.info("Updating filetypes that should be processed in db")
+    for filetype in ft:
+        logger.debug(f"Updating \'{filetype}\' and setting shoudProcess to 1")
+        try:        
+            c.execute(f'UPDATE filetypes SET shouldProcess = 0 WHERE extension = "{filetype}"')
+            c.connection.commit()
+
+        except Exception as e:
+            logger.error(f"Unable to add \'{filetype}\' to db - {e}")
+
+def addFiletypesAllowed(c, ft):
+
+    logger.info("Updating filetypes in db")
+    for filetype in ft:
+        logger.debug(f"Adding \'{filetype}\' to the filetypes table")
+        try:        
+            c.execute(f'INSERT INTO filetypes ("extension", "shouldProcess") VALUES ("{filetype}", 1)')
+            c.connection.commit()
+
+        except Exception as e:
+            logger.error(f"Unable to add \'{filetype}\' to db - {e}")
 
 def extractGPSData(filepath, gps_exif):
 
@@ -246,9 +300,10 @@ def extractGPSData(filepath, gps_exif):
 def processImage(file, img_data):
 
     return_info = img_data.copy()
+    logger.info(f"Processing image: {file['fqdn']}")
 
     with Image.open(file["fqdn"]) as img:
-        logger.info(f"ProcessImage() - Opened image: {file['fqdn']} for processing")
+        logger.info(f"Opened image: {file['fqdn']} for processing")
 
         try:
             return_info["hash"] = hashlib.md5(img.tobytes()).hexdigest()
@@ -262,23 +317,26 @@ def processImage(file, img_data):
                 except Exception as e:
                     logger.error(f"GPS Data not found for file: {file['fqdn']}")
                 try:
-                    return_info["cameraModel"] = f"{exif_data[272]}"
-                    return_info["cameraMake"] = f"{exif_data[271]}"
+                    return_info["cameraModel"] = "".join([c for c in f"{exif_data[272]}" if (c.isalnum() or c == " ")])
+                    return_info["cameraMake"] = "".join([c for c in f"{exif_data[271]}" if (c.isalnum() or c == " ")])
+                    # return_info["cameraModel"] = f"{exif_data[272]}".encode('ascii', errors='ignore')
+                    # return_info["cameraMake"] = f"{exif_data[271]}".encode('ascii', errors='ignore')
                 except Exception as e:
-                    logger.error(F"ProcessImage() - Failed to get exif camera model")
+                    logger.error(F"Failed to get exif camera model")
+                    logger.debug(f"{[f"{ord(c):02X}" for c in f'{exif_data[271]}'.encode('ascii', errors='ignore')]}")
                 try:
                     return_info["exifDateTime"] = exif_data[36867]
                 except Exception as e:
-                    logger.error(F"ProcessImage() - Failed to get exif datetime")
+                    logger.error(F"Failed to get exif datetime")
                 
             return_info['processed'] = 1
-            logger.debug(f"ProcessImage() - EXIF Data:")
-            for k, v in return_info.items():
-                logger.debug(f"ProcessImage() - \t{k}: \t{v}")
+            # logger.debug(f"EXIF Data:")
+            # for k, v in return_info.items():
+            #     logger.debug(f"\t{k}: \t{v}")
 
             
         except Exception as e:
-            raise Exception(f"ProcessImage() - {e}")
+            logger.error(F"{e}")
         
     return return_info
 
@@ -291,7 +349,7 @@ def processVideo(file_data):
 
     video_tags = ['width', 'height', 'duration_ts', 'duration', 'nb_frames']
     video_data_dict = {}
-    logger.info(f"ProcessingVideo() - Processing file: {file_data["fqdn"]}")
+    logger.info(f"Processing video file: {file_data["fqdn"]}")
     try:
 
         probe = ffmpeg.probe(file_data["fqdn"])
@@ -315,38 +373,48 @@ def processVideo(file_data):
         try:
             #get make
             tags = probe['format']['tags']
-            
-            return_data["cameraMake"] = tags['com.apple.quicktime.make']
-            return_data["cameraModel"] = tags['com.apple.quicktime.model']
-            return_data["exifDateTime"] = tags['com.apple.quicktime.creationdate']
+            for key, tag in [("cameraMake", 'com.apple.quicktime.make'), ("cameraModel", 'com.apple.quicktime.model'), ("exifDateTime", 'com.apple.quicktime.creationdate')]:
+                try:
+                    return_data[key] = tags[tag]
+                except Exception as e:
+                    logger.error(f"\tFailed to get exif data: {key} - {tag}")
+            # "cameraMake"] = tags['com.apple.quicktime.make']
+            # return_data["cameraModel"] = tags['com.apple.quicktime.model']
+            # return_data["exifDateTime"] = tags['com.apple.quicktime.creationdate']
 
-            
-            pattern = r"[+-]\d+.\d+"
-            matches = re.findall(pattern, tags['com.apple.quicktime.location.ISO6709'])
-            
-            # parsed_location
-            return_data["latitude"] = f'{matches[0][1:]} N'
-            return_data["longitude"] = f'{matches[1][1:]} W'
-            return_data["altitude"] = matches[2]
+            try:
+                pattern = r"[+-]\d+.\d+"
+                matches = re.findall(pattern, tags['com.apple.quicktime.location.ISO6709'])
+                
+                # parsed_location
+                return_data["latitude"] = f'{matches[0][1:]} N'
+                return_data["longitude"] = f'{matches[1][1:]} W'
+                return_data["altitude"] = matches[2]
+            except Exception as e:
+                logger.error(f"Failed to get EXIF data (GPS) for: {file_data['fqdn']}")
             
             return_data['video_data']['filesize'] = probe['format']['size']
             return_data['hash'] = hashlib.md5(json.dumps(return_data['video_data']).encode('utf-8')).hexdigest()
 
+            return_data['processed'] = 1
+
         except Exception as e:
             
-            logger.error(f"PROCESSVIDEO() - Faield to get exif data - {e}")
+            logger.error(f"Faield to get exif data - {e}")
 
     except Exception as e:
         
-        logger.error("PROCESSVIDEO() - Failed to process video - {e}")
+        logger.error("Failed to process video - {e}")
 
 
     return return_data
     
 def processMedia(files, cursor, ftRef):
 
-    logger.info(f"ProcessMedia() - Processing all found files")
-    ACCEPTED_FILETYPES = ["jpg", "jpeg", "mov", "m4v"]
+    filesProcessed = 0
+
+    logger.info(f"Processing all found files")
+    ACCEPTED_FILETYPES = ["jpg", "jpeg", "mov", "m4v", 'png', 'avi']
 
     for file in files:
 
@@ -368,20 +436,20 @@ def processMedia(files, cursor, ftRef):
             "fqdn": file["fqdn"]
         }
 
-        logger.info(f"ProcessMedia() - processing: {file['fqdn']}")
-            
+        logger.info(f"processing: {file['fqdn']}")
+        print(f"Processing: {file['fqdn']}")
 
         try:
             if file['extension'] in ACCEPTED_FILETYPES:
 
-                if file['extension'] in ['jpg', 'jpeg']:
+                if file['extension'] in ['jpg', 'jpeg', 'png']:
                     try:
                         img_data = processImage(file, img_data)
 
                     except Exception as e:
                         logger.error(f"ProcessMedia - {e}")
                 
-                elif file['extension'] in ['mov', 'm4v']:
+                elif file['extension'] in ['mov', 'm4v', 'avi']:
 
                     try:
                         img_data = processVideo(img_data)
@@ -390,41 +458,58 @@ def processMedia(files, cursor, ftRef):
 
                         logger.error(f"ProcessMedia - {e}")
 
+                else:
+                    logger.info(f"Processing not available for filetype: {file['exntension']}")
+
             updateFileInDb(cursor, img_data)
+
+            filesProcessed += 1
         except Exception as e:
             logger.error(f"Failed to process file: {file['fqdn']} - {e}")
 
+    return filesProcessed
+
 def updateFileInDb(cursor, img_data):
 
-    logger.info(f"UpdateFileInDb() - updating file in db")
+    logger.info(f"updating file in db")
     
     try:
-        print("\n")
-        print(img_data)
         cursor.execute("UPDATE media SET hash=:hash, size=:size, latitude=:latitude, longitude=:longitude, processed=:processed, fileDateTime=:fileDateTime, exifDateTime=:exifDateTime, cameraMake=:cameraMake, cameraModel=:cameraModel WHERE id=:id", img_data)
         cursor.connection.commit()
 
     except Exception as e:
-        logger.error(f"UPDATEFILEINDB() - {e}")
-        logger.error(f"UPDATEFILEINDB() - \t{img_data['fqdn']}")
+        logger.error(f"{e}")
+        logger.error(f"\t{img_data['fqdn']}")
 
 def getFilesFromDB(cur):
 
-    logger.info(f"GetFilesFromDB() - Retrieving unprocessed files from db")
-    cur.execute("SELECT * FROM media LEFT JOIN filetypes ON media.filetypeId = filetypes.id WHERE processed = 0")
+    logger.info(f"Retrieving unprocessed files from db")
+    query = "SELECT * FROM media LEFT JOIN filetypes ON media.filetypeId = filetypes.id WHERE processed = 0"
+    if args.numbertoprocess != -1:
+        query = f"{query} LIMIT {args.numbertoprocess}"
+
+    logger.info(f"Query:\n\t{query}")
+    cur.execute(query)
     return cur.fetchall()
 
 def main():
 
+    numberOfFilesFound = 0
+    numberOfFilesProcessed = 0
+
     try:
         connection, cursor = setupDB()
 
+        #populate filetypes db table with basic filetypes
+        addFiletypesAllowed(cursor, ["jpg", "jpeg", "mov", "m4v", 'avi', 'png'])
+
         if args.find:
-            files = findFiles(cursor)
+            filetypes = loadKnownFiletypes(cursor)
+            files = findFiles(cursor, filetypes)
         
             files = files[0:args.numbertoprocess]
+            numberOfFilesFound = len(files)
 
-            filetypes = loadKnownFiletypes(cursor)
             #Create a reference dict so that the next step can use the ids of the filetypes
 
             addFilesToDB(cursor, files, filetypes)
@@ -432,40 +517,53 @@ def main():
         if args.process:
             
             filetypes = loadKnownFiletypes(cursor)
-            
+            logger.info(f"Loaded {len(filetypes)} filetypes fron DB")
             #Get all files from the db
             unprocessedFiles = getFilesFromDB(cursor)
+            numberOfFilesFound = len(unprocessedFiles)
+            print(f"There are {numberOfFilesFound} files that need to be processed")
             logger.info(f"There are {len(unprocessedFiles)} files that need to be processed")
-            processMedia(unprocessedFiles, cursor, filetypes)
+            numberOfFilesProcessed = processMedia(unprocessedFiles, cursor, filetypes)
 
 
     except Exception as e:
         connection.close()
-        raise Exception(f"MAIN() - {e}")
+        raise Exception(f"{e}")
 
     #close the DB connection
     connection.close()
+
+    return (numberOfFilesFound, numberOfFilesProcessed)
 
 if __name__ == "__main__":
 
     #record the start time
     startTime = time.perf_counter()
-
+    
     #set up logger
-    fmt = '[%(levelname)s]\t%(asctime)s - %(filename)s:%(lineno)d - %(message)s'
+    fmt = '[%(levelname)s]\t%(asctime)s - %(filename)s:%(lineno)d - %(funcName)s() - %(message)s'
+    logFmt = logging.Formatter(fmt)
+    logging.basicConfig(level=logging.ERROR, format=fmt, filemode="a")
+    logHandler = logging.handlers.RotatingFileHandler("mm_log.log", maxBytes=200*1024*1024, backupCount=10)
+    logHandler.setFormatter(logFmt)
+    logger.addHandler(logHandler)
+    logger.propagate = False
     if args.logging:
-        logging.basicConfig(level=logging.INFO, format=fmt, filename="./logs.txt", filemode="a")
+        logger.setLevel(logging.INFO)
     elif args.verbose:
-        logging.basicConfig(level=logging.DEBUG, format=fmt, filename="./logs.txt", filemode="a")
+        logger.setLevel(logging.DEBUG)
+        # logging.basicConfig(level=logging.DEBUG, format=fmt, filename="./logs.txt", filemode="a")
     else:
-        logging.basicConfig(level=100, filename="./logs.txt", filemode="a")
+        logging.basicConfig(level=100)
 
     try:
-        main()
+        found, processed = main()
+        
+        #record the end time
+        endTime = time.perf_counter()
+        logger.info(f'{found} files found and {processed} files processed in {round(endTime - startTime, 4)} sseconds')
+
     except Exception as e:
         logger.error(e)
 
-    #record the end time
-    endTime = time.perf_counter()
-
-    logger.info(f'Elapsed time {round(endTime - startTime, 4)} sseconds')
+    

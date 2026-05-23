@@ -51,4 +51,9 @@ Some variation of these processes over and over again has resulted in duplicate 
 - [x] Update metadata for each supported file in the db
 - [x] Add flag specifically for finding media
 - [ ] Add flag for list duplicate file info (total files, count of uniques, etc)
-- [ ] Add feature ability to process videos 
+- [x] Add feature ability to process videos 
+- [ ] Add feature to force get hashes and ignore all other data errors
+- [ ] GUI: View images
+- [ ] GUI: View duplicates
+- [ ] Feature: list duplicates
+- [ ] Feature: Show image library stats
